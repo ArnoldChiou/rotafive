@@ -1,0 +1,31 @@
+# Task: Upgrade RotaFive to Real-time WebSockets with Redis Pub/Sub
+
+## 1. Goal
+Replace the current 3-second polling and BroadcastChannel sync with a robust WebSocket architecture. This will enable instant, cross-device notifications when freelancers decline/accept invitations or when replacements occur.
+
+## 2. Backend (FastAPI + Redis Pub/Sub)
+- **WebSocket Manager**: Create a `ConnectionManager` class in `main.py` to track active WebSocket connections by `user_id`.
+- **Redis Pub/Sub Integration**:
+    - When a freelancer declines via `/api/respond-invitation`, the backend should **Publish** a message to a Redis channel (e.g., `project_updates:{project_id}`).
+    - The message should contain the event type (`REPLACEMENT_FOUND`, `INVITATION_ACCEPTED`) and the relevant data.
+- **WebSocket Endpoint**:
+    - Create `/ws/project/{project_id}`.
+    - Upon connection, verify the JWT (from query params) and ensure the user has access to this project.
+    - Use an async task to **Subscribe** to the Redis channel for this project and **Push** incoming messages to the connected client/freelancer.
+
+## 3. Frontend (Vue 3 + Store)
+- **Store Upgrade (`store.js`)**:
+    - Add a `socket` state and a `connectWebSocket(projectId)` method.
+    - Handle automatic reconnection logic.
+    - When a message is received (e.g., `REPLACEMENT_FOUND`), update the `freelancers` array in the reactive store immediately.
+- **View Integration**:
+    - In `ClientView.vue`, replace the `setInterval` polling with the WebSocket connection call.
+    - In `FreelancerSimulationView.vue`, ensure the view updates instantly when an invitation is cancelled because another person accepted.
+
+## 4. Logic & Safety
+- **Authentication**: Since WebSockets don't easily support custom headers for the initial handshake, accept the JWT via a `token` query parameter and validate it using the existing `auth.py` logic.
+- **Fallback**: Keep a simple "Refresh" button as a manual fallback, but remove the automated polling to save server resources.
+
+## 5. Requirement
+- Update `CONTEXT.md` to reflect that the system now uses WebSockets and Redis Pub/Sub for real-time synchronization.
+- Ensure the "Decline & Replace" animation in the UI is triggered by the WebSocket message.

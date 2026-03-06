@@ -18,7 +18,7 @@
 | **Backend** | FastAPI (Python) + Uvicorn / Gunicorn |
 | **Auth** | JWT (`python-jose`) + bcrypt (密碼 hash) + `python-multipart` (OAuth2 form) |
 | **Database** | PostgreSQL 15 (`asyncpg` driver) |
-| **Cache / Real-time** | Redis (`redis-py`) |
+| **Cache / Real-time** | Redis Pub/Sub (`redis.asyncio`) + WebSockets |
 | **Containerization** | Docker + Docker Compose |
 | **CI/CD** | GitHub Actions → GHCR (GitHub Container Registry) |
 
@@ -32,7 +32,7 @@ RotaFive/
 │   ├── main.py              # FastAPI 所有 API 端點 + 身份驗證整合
 │   ├── auth.py              # JWT 建立/驗證、bcrypt hash、get_current_user dependency
 │   ├── seed.py              # 初始測試資料寫入腳本（10 名接案者）
-│   ├── requirements.txt     # Python 依賴
+│   ├── requirements.txt     # Python 依賴（含 FastAPI, uvicorn[standard], websockets, redis）
 │   ├── Dockerfile.prod      # 後端生產 Dockerfile (non-root + Gunicorn)
 │   └── .env.example         # 環境變數範本
 │
@@ -48,7 +48,7 @@ RotaFive/
 │       ├── HomeView.vue              # 主頁，依角色決定顯示 Client/Queue/FreelancerMock
 │       ├── ClientView.vue            # 客戶端：發案、技能選擇、配對結果、邀請
 │       ├── QueueView.vue             # 管理端：全部接案者輪值佇列 (5秒輪詢)
-│       └── FreelancerSimulationView.vue  # 接案者信箱 (Accept/Decline)
+│       └── FreelancerSimulationView.vue  # 接案者信箱 (Accept/Decline，WebSocket 即時刷新)
 │
 ├── init.sql                 # DB 建表：users, freelancers, projects, dispatch_logs
 ├── docker-compose.yml       # 開發環境：PostgreSQL + Redis (讀 backend/.env)
@@ -153,8 +153,17 @@ get_current_user(token, db_pool) -> dict     # JWT decode + DB user lookup
 | `GET` | `/api/match?skills=Vue,Python` | **client only** | RotaFive 核心：建立 project（記錄 `client_id`），找出前 5 名候選人 |
 | `GET` | `/api/invitations` | 角色依據 | client 看自己發出的；freelancer 看自己收到的 |
 | `POST` | `/api/invite` | 登入 | 送出邀請：dispatch_logs `matched` → `invited` |
-| `POST` | `/api/respond-invitation` | 登入 | accept/decline；decline 觸發 Redis cooldown + 自動遞補 |
+| `POST` | `/api/respond-invitation` | 登入 | accept/decline；decline 觸發 Redis cooldown + 自動遞補。皆會觸發 Redis Pub/Sub 廣播事件。 |
 | `POST` | `/api/reset-cooling` | 登入 | 原型測試用：接案者重設為 `idle` |
+
+### WebSocket 端點
+
+| Method | Path | 權限 | 說明 |
+|--------|------|------|------|
+| `WS` | `/ws/project/{project_id}` | 登入 | 客戶端與接案者透過此頻道接收專案相關推播（如 ACCEPTED, DECLINED_REPLACED） |
+| `WS` | `/ws/freelancer/{freelancer_id}` | freelancer | Freelancer 連接此全域頻道，以接收全新的專案邀請（INVITED） |
+
+*皆需透過 `?token=` 查詢參數帶入 JWT 驗證。*
 
 ---
 
@@ -206,8 +215,7 @@ get_current_user(token, db_pool) -> dict     # JWT decode + DB user lookup
 ### `ClientView.vue`
 - 輸入 Job Title + 選擇技能 → 呼叫 `getMatches()`
 - 顯示 5 張候選人卡片（Send Job Invite / Simulate Decline）
-- 監聽 `BroadcastChannel('rotafive_sync')` 做跨分頁即時更新
-- **3 秒 polling fallback**：輪詢 `/api/invitations` 偵測 Decline（跨 session 的備援機制）
+- 透過 **WebSocket (`/ws/project/{id}`)** 監聽 `ACCEPTED` / `DECLINED_REPLACED` 等事件，即時觸發 UI 滑入/滑出動畫
 
 ### `RegisterView.vue`
 - 選擇 Client 或 Freelancer 角色
@@ -237,12 +245,11 @@ get_current_user(token, db_pool) -> dict     # JWT decode + DB user lookup
 
 ---
 
-## 跨分頁即時同步
+## 跨分頁 / 即時同步
 
 | 機制 | 說明 |
 |---|---|
-| **BroadcastChannel** | 同一瀏覽器不同分頁，發送 `DECLINED_REPLACED` / `DECLINED_NO_REPLACEMENT` / `ACCEPTED` 事件 |
-| **Polling fallback** | ClientView 每 3 秒輪詢 `/api/invitations`，偵測被邀請的接案者是否已回應（跨 session 備援）|
+| **WebSockets (Redis Pub/Sub)** | 後端建立 `/ws/project/{project_id}` 及 `/ws/freelancer/{freelancer_id}`。當配對事件發生（發送邀請、接受、拒絕等）時，後端透過 Redis Pub/Sub 發送 `INVITED` / `DECLINED_REPLACED` / `ACCEPTED` 等事件至客戶端與接案者，保證零延遲的跨視窗/跨裝置狀態同步。 |
 
 ---
 

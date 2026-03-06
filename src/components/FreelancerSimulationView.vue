@@ -4,20 +4,69 @@ import { store } from '../store.js';
 import { Mail, CheckCircle, XCircle } from 'lucide-vue-next';
 
 const invitations = ref([]);
-let intervalId = null;
+const activeSockets = {};
 
 const loadInvitations = async () => {
     invitations.value = await store.fetchInvitations();
+
+    // Disconnect old connections for projects that are no longer active
+    for (let pid in activeSockets) {
+        if (!invitations.value.find(inv => String(inv.project_id) === String(pid))) {
+            activeSockets[pid].close();
+            delete activeSockets[pid];
+        }
+    }
+
+    // Connect new connections for pending invitations to listen to sibling responses
+    for (let inv of invitations.value) {
+        if (!activeSockets[inv.project_id]) {
+            const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api';
+            const baseWsUrl = apiBase.replace('http://', 'ws://').replace('https://', 'wss://').replace('/api', '');
+            const ws = new WebSocket(`${baseWsUrl}/ws/project/${inv.project_id}?token=${store.token}`);
+            
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'ACCEPTED' || data.type === 'DECLINED_REPLACED') {
+                        // Another freelancer responded, or we were replaced! Refresh the list.
+                        loadInvitations();
+                    }
+                } catch (e) {}
+            };
+            activeSockets[inv.project_id] = ws;
+        }
+    }
 };
+
+let globalWs = null;
 
 onMounted(() => {
     loadInvitations();
-    // Poll every 3 seconds to get the latest invitations
-    intervalId = setInterval(loadInvitations, 3000);
+
+    // Attach to global freelancer socket to listen for NEW invites
+    if (store.user && store.user.role === 'freelancer') {
+        const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api';
+        const baseWsUrl = apiBase.replace('http://', 'ws://').replace('https://', 'wss://').replace('/api', '');
+        globalWs = new WebSocket(`${baseWsUrl}/ws/freelancer/${store.user.id}?token=${store.token}`);
+        globalWs.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                if (data.type === 'INVITED') {
+                    // New job!
+                    loadInvitations();
+                }
+            } catch(e) {}
+        }
+    }
 });
 
 onUnmounted(() => {
-    if (intervalId) clearInterval(intervalId);
+    for (let pid in activeSockets) {
+         activeSockets[pid].close();
+    }
+    if (globalWs) {
+        globalWs.close();
+    }
 });
 
 const handleRespond = async (freelancerId, projectId, action) => {

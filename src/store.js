@@ -29,6 +29,7 @@ export const store = reactive({
     token: getToken(),
     user: null,         // { id, email, role }
     freelancers: [],
+    socket: null,       // WebSocket instance
 
     availableSkills: computed(() => [
         'Data Science', 'Design', 'Django', 'Docker', 'Figma', 'Flask', 'Illustration', 'JavaScript',
@@ -86,7 +87,51 @@ export const store = reactive({
         this.token = null;
         this.user = null;
         this.freelancers = [];
+        this.disconnectWebSocket();
         clearToken();
+    },
+
+    // ─── WebSocket Logic ─────────────────────────────────────────────────────────
+    connectWebSocket(projectId, onMessageCallback) {
+        this.disconnectWebSocket(); // Ensure no duplicates
+        if (!this.token) return;
+
+        const wsUrl = `ws://${window.location.host}/ws/project/${projectId}?token=${this.token}`;
+        // If API_BASE is different host in dev: Use VITE_API_BASE_URL converted to ws://
+        const baseWsUrl = API_BASE.replace('http://', 'ws://').replace('https://', 'wss://').replace('/api', '');
+        const fullWsUrl = `${baseWsUrl}/ws/project/${projectId}?token=${this.token}`;
+
+        this.socket = new WebSocket(fullWsUrl);
+
+        this.socket.onopen = () => {
+            console.log(`WebSocket connected for project ${projectId}`);
+        };
+
+        this.socket.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                if (onMessageCallback) onMessageCallback(data);
+            } catch (err) {
+                console.error("WebSocket message parsing error", err);
+            }
+        };
+
+        this.socket.onclose = () => {
+            console.log(`WebSocket disconnected. Reconnecting...`);
+            setTimeout(() => {
+                if (this.user) {
+                    this.connectWebSocket(projectId, onMessageCallback);
+                }
+            }, 3000); // Reconnect in 3s
+        };
+    },
+
+    disconnectWebSocket() {
+        if (this.socket) {
+            this.socket.onclose = null; // Prevent reconnect loop
+            this.socket.close();
+            this.socket = null;
+        }
     },
 
     // ─── Freelancers ──────────────────────────────────────────────────────────
@@ -160,9 +205,6 @@ export const store = reactive({
                     });
                 }, 15000);
                 await this.fetchFreelancers();
-                const bc = new BroadcastChannel('rotafive_sync');
-                bc.postMessage({ type: 'ACCEPTED', projectId, freelancerId });
-                bc.close();
                 return true;
             }
             return false;
@@ -186,14 +228,8 @@ export const store = reactive({
                     if (typeof newF.skills === 'string') {
                         try { newF.skills = JSON.parse(newF.skills); } catch (e) { }
                     }
-                    const bc = new BroadcastChannel('rotafive_sync');
-                    bc.postMessage({ type: 'DECLINED_REPLACED', projectId, declinedId: freelancerId, replacement: newF });
-                    bc.close();
                     return newF;
                 }
-                const bc = new BroadcastChannel('rotafive_sync');
-                bc.postMessage({ type: 'DECLINED_NO_REPLACEMENT', projectId, declinedId: freelancerId });
-                bc.close();
                 return null;
             }
             return null;

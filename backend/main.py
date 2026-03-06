@@ -1,15 +1,17 @@
 import os
 import json
 import random
-from typing import Optional, List
+import asyncio
+from typing import Optional, List, Dict
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, status, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 import asyncpg
 import redis
+import redis.asyncio as aioredis
 from dotenv import load_dotenv
 
 from auth import (
@@ -26,16 +28,71 @@ COOLDOWN_TTL = 1800  # 30 minutes
 
 db_pool = None
 redis_client = None
+redis_listener_task = None
+
+class ConnectionManager:
+    def __init__(self):
+        # Maps connection_id (str) like "project_1" or "freelancer_3" to a list of active WebSocket connections
+        self.active_connections: Dict[str, List[WebSocket]] = {}
+
+    async def connect(self, websocket: WebSocket, connection_id: str):
+        await websocket.accept()
+        if connection_id not in self.active_connections:
+            self.active_connections[connection_id] = []
+        self.active_connections[connection_id].append(websocket)
+
+    def disconnect(self, websocket: WebSocket, connection_id: str):
+        if connection_id in self.active_connections:
+            if websocket in self.active_connections[connection_id]:
+                self.active_connections[connection_id].remove(websocket)
+            if not self.active_connections[connection_id]:
+                del self.active_connections[connection_id]
+
+    async def broadcast(self, message: str, connection_id: str):
+        if connection_id in self.active_connections:
+            for connection in list(self.active_connections[connection_id]):
+                try:
+                    await connection.send_text(message)
+                except Exception:
+                    self.disconnect(connection, connection_id)
+
+manager = ConnectionManager()
+
+async def redis_listener():
+    """Listens for messages on Redis project channels and forwards them to WebSockets."""
+    r = aioredis.from_url(REDIS_URL, decode_responses=True)
+    pubsub = r.pubsub()
+    await pubsub.psubscribe("project:*")
+    await pubsub.psubscribe("freelancer:*")
+    try:
+        async for message in pubsub.listen():
+            if message["type"] == "pmessage":
+                channel = message["channel"]
+                data = message["data"]
+                # Channel could be 'project:1' or 'freelancer:3'
+                # manager.broadcast takes `project_id`. Let's rename it implicitly to `channel_id` (the whole suffix)
+                channel_map_key = channel.replace(":", "_") # e.g. project_1 or freelancer_3
+                await manager.broadcast(data, channel_map_key)
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        print(f"Redis listener error: {e}")
+    finally:
+        await pubsub.close()
+        await r.close()
 
 # ─── Lifespan ──────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global db_pool, redis_client
+    global db_pool, redis_client, redis_listener_task
     try:
         db_pool = await asyncpg.create_pool(DATABASE_URL)
         redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+        redis_listener_task = asyncio.create_task(redis_listener())
         yield
     finally:
+        if redis_listener_task:
+            redis_listener_task.cancel()
         if db_pool:
             await db_pool.close()
         if redis_client:
@@ -50,6 +107,46 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ══════════════════════════════════════════════════════════════════════════════
+# WEBSOCKET ENDPOINTS
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.websocket("/ws/project/{project_id}")
+async def websocket_project(websocket: WebSocket, project_id: str, token: str = Query(...)):
+    try:
+        user = await get_current_user(token, db_pool)
+    except Exception:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+        
+    conn_id = f"project_{project_id}"
+    await manager.connect(websocket, conn_id)
+    try:
+        while True:
+            _ = await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, conn_id)
+    except Exception:
+        manager.disconnect(websocket, conn_id)
+
+@app.websocket("/ws/freelancer/{freelancer_id}")
+async def websocket_freelancer(websocket: WebSocket, freelancer_id: str, token: str = Query(...)):
+    try:
+        user = await get_current_user(token, db_pool)
+    except Exception:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+        
+    conn_id = f"freelancer_{freelancer_id}"
+    await manager.connect(websocket, conn_id)
+    try:
+        while True:
+            _ = await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, conn_id)
+    except Exception:
+        manager.disconnect(websocket, conn_id)
 
 # ─── Auth dependency helper (injects db_pool) ──────────────────────────────────
 async def current_user(token: str = Depends(oauth2_scheme)):
@@ -289,6 +386,14 @@ async def invite_freelancer(req: InviteRequest, user=Depends(require_client)):
                     "INSERT INTO dispatch_logs (project_id, freelancer_id, status) VALUES ($1, $2, 'invited')",
                     req.project_id, req.freelancer_id
                 )
+            # Notify globally so pending freelancers can refresh and connect to this project websocket.
+            event_data = {
+                "type": "INVITED",
+                "projectId": req.project_id,
+                "freelancerId": req.freelancer_id
+            }
+            redis_client.publish(f"freelancer:{req.freelancer_id}", json.dumps(event_data))
+
             return {"success": True, "message": "Invited successfully"}
         except Exception as e:
             return {"success": False, "message": str(e)}
@@ -310,6 +415,12 @@ async def respond_invitation(req: RespondRequest, user=Depends(current_user)):
                     "UPDATE freelancers SET status = 'working', last_assigned_at = CURRENT_TIMESTAMP WHERE id = $1",
                     req.freelancer_id
                 )
+                event_data = {
+                    "type": "ACCEPTED",
+                    "projectId": req.project_id,
+                    "freelancerId": req.freelancer_id
+                }
+                redis_client.publish(f"project:{req.project_id}", json.dumps(event_data))
                 return {"success": True, "action": "accept", "freelancer_id": req.freelancer_id}
 
             elif req.action == "decline":
@@ -349,8 +460,21 @@ async def respond_invitation(req: RespondRequest, user=Depends(current_user)):
                         "INSERT INTO dispatch_logs (project_id, freelancer_id, status) VALUES ($1, $2, 'matched')",
                         req.project_id, new_f["id"]
                     )
+                    event_data = {
+                        "type": "DECLINED_REPLACED",
+                        "projectId": req.project_id,
+                        "declinedId": req.freelancer_id,
+                        "replacement": new_f
+                    }
+                    redis_client.publish(f"project:{req.project_id}", json.dumps(event_data))
                     return {"success": True, "action": "decline", "replaced_with": new_f}
                 else:
+                    event_data = {
+                        "type": "DECLINED_NO_REPLACEMENT",
+                        "projectId": req.project_id,
+                        "declinedId": req.freelancer_id
+                    }
+                    redis_client.publish(f"project:{req.project_id}", json.dumps(event_data))
                     return {"success": True, "action": "decline", "replaced_with": None}
 
 
