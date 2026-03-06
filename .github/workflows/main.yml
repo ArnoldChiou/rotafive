@@ -14,9 +14,15 @@ jobs:
       contents: read
       packages: write
 
+    env:
+      OWNER_LC: ${{ github.repository_owner }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Set lowercase owner
+        run: echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -36,8 +42,8 @@ jobs:
           file: ./backend/Dockerfile.prod
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/rotafive-backend:latest
-            ghcr.io/${{ github.repository_owner }}/rotafive-backend:${{ github.sha }}
+            ghcr.io/${{ env.OWNER_LC }}/rotafive-backend:latest
+            ghcr.io/${{ env.OWNER_LC }}/rotafive-backend:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -49,9 +55,10 @@ jobs:
           file: ./Dockerfile.prod
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/rotafive-frontend:latest
-            ghcr.io/${{ github.repository_owner }}/rotafive-frontend:${{ github.sha }}
+            ghcr.io/${{ env.OWNER_LC }}/rotafive-frontend:latest
+            ghcr.io/${{ env.OWNER_LC }}/rotafive-frontend:${{ github.sha }}
           build-args: |
             VITE_API_BASE_URL=${{ vars.VITE_API_BASE_URL }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
