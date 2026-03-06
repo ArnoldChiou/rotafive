@@ -1,0 +1,39 @@
+# Task: Implement Real-time Match Notification & Auto-replacement Logic
+
+## 1. Goal
+Upgrade the "Match" process into a selective "On-Demand Invitation" phase. When a client matches, the system recommends 5 top available freelancers without notifying them. The client reviews the list and explicitly "Invites" specific freelancers. If an invited freelancer "Declines", the system must automatically pick the next available person from the queue (the 6th person) and slide them into the client's view to keep the pool of choices at 5.
+
+## 2. Database & Backend (FastAPI) Updates
+- **Update `dispatch_logs` Table**: Ensure it supports statuses: `invited`, `accepted`, `declined`, `expired`.
+- **Logic: The "On-Demand Invite" Endpoints**:
+    - **`GET /api/match`**: Only purely fetch and return the top 5 candidates. Do **NOT** create any `dispatch_logs` entries at this stage.
+    - **`POST /api/invite`** (New):
+        - Payload: `{ freelancer_id: int, project_id: int }`
+        - Creates a `dispatch_logs` entry with status `invited` for the specific freelancer.
+    - **`POST /api/respond-invitation`**:
+        - Payload: `{ freelancer_id: int, project_id: int, action: 'accept' | 'decline' }`
+        - If `decline`:
+            1. Update the log to `declined`.
+            2. **Trigger Auto-replacement**: Find the next freelancer who is `idle` AND NOT currently in the `invited` or `declined` list for this project (using the `last_assigned_at` order).
+            3. Return the new replacement freelancer's data to the UI to fill the visual gap.
+- **Simulation**: Add a temporary endpoint `POST /api/simulate-random-decline` (Optional now that we have the Mock view) to test the flow.
+
+## 3. Frontend (Vue 3) Implementation
+- **Client Matching Dashboard**:
+    - When matching starts, show the 5 cards. No one is invited yet.
+    - Replace the immediate hire button with an "Invite to Project" button.
+    - Once invited, the card's status changes to `Waiting for response...`.
+- **Auto-Update UX**:
+    - If a freelancer declines (simulated via the Mock view or a test button), the declined card should perform a "Slide-out" animation.
+    - The new 6th candidate's card returned by the backend should "Slide-in" to maintain 5 options.
+    - Use Vue's `<TransitionGroup>` to handle this smooth replacement.
+
+## 4. Freelancer Simulation View (New Component)
+- A separate view `/freelancer-mock` or toggle view.
+- Lists the pending invitations received by freelancers (only those explicitly invited by the client).
+- Allow the user to click "Accept" or "Decline".
+- Declining here should trigger the Client View's auto-replacement logic.
+
+## 5. Coding Standards
+- Use async/await for all database operations.
+- Ensure the "Fair Rotation" (last_assigned_at) is strictly followed when picking the replacement.

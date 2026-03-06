@@ -1,0 +1,25 @@
+# Task: Integrate RotaFive Frontend and Backend
+
+## 1. Context
+I have a Vue 3 frontend prototype and an `init.sql` schema for RotaFive. 
+Now, I need you to build a functional FastAPI backend and connect it to the frontend.
+
+## 2. Backend Requirements (FastAPI)
+- **Database Connection**: Use `psycopg2` or `asyncpg` to connect to a PostgreSQL database based on the `init.sql` provided.
+- **Endpoints to Create**:
+    - `GET /api/freelancers`: List all freelancers (for the Queue view).
+    - `GET /api/match`: The "RotaFive Logic". Select the top 5 `idle` freelancers ordered by `last_assigned_at` ASC.
+    - `POST /api/select`: When a client selects a freelancer. 
+        - Input: `{ freelancer_id: int, project_id: int }`
+        - Logic: Update the freelancer's `status` to 'working' and `last_assigned_at` to the current UTC time.
+- **Environment**: Use `.env` for database credentials.
+
+## 3. Frontend Integration (Vue 3)
+- Replace the mock data in the existing Vue prototype with real API calls using `fetch` or `axios`.
+- **Match Button**: Trigger the `GET /api/match` call and display the results.
+- **Select Button**: Trigger the `POST /api/select` call. After success, refresh the "Queue View" to show the freelancer has moved to the back of the line.
+
+## 4. Implementation Goal
+Ensure the "Fair Rotation" logic is visible: When a user is selected, their `last_assigned_at` updates, and they should no longer appear in the top 5 matching list until others have had their turn.
+
+Please generate the `main.py` (FastAPI) and the updated `App.vue` (or relevant components).

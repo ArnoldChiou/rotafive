@@ -1,0 +1,55 @@
+# ─── Python (Backend) ────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.env
+.env.local
+*.env
+
+# Python virtual environment
+backend/.venv/
+.venv/
+
+# ─── Node / Frontend ─────────────────────────────────────────────────────────
+node_modules/
+dist/
+.cache/
+.parcel-cache/
+*.local
+
+# Vite / Vue build output
+/dist
+
+# ─── Secrets & Credentials ────────────────────────────────────────────────────
+*.pem
+*.key
+*.cert
+*.p12
+*.pfx
+.env
+.env.*
+!.env.example
+!backend/.env.example
+
+# ─── OS / Editor ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/settings.json
+*.swp
+*.swo
+
+# ─── Docker ───────────────────────────────────────────────────────────────────
+# Keep docker-compose and Dockerfiles, but ignore local override files
+docker-compose.override.yml
+
+# ─── Test scripts ─────────────────────────────────────────────────────────────
+test_decline.py
+
+# ─── IDE session files ────────────────────────────────────────────────────────
+*.session.sql

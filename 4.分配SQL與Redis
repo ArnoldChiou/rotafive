@@ -1,0 +1,22 @@
+# Task: Integrate Redis for Real-time Status and Cooldown Logic
+
+## 1. Goal
+Integrate Redis into the RotaFive backend to handle high-frequency status updates and "Cooling" logic (temporary exclusion from the matching pool).
+
+## 2. Redis Usage Strategy
+- **User Online Status**: Store which freelancers are currently "Online" using a simple Key-Value: `online:{user_id} -> true`.
+- **Declination Cooldown**: If a freelancer declines an invitation, set a Redis key with an expiration (TTL): `cooldown:{user_id} -> project_id` with an expiry of 30 minutes.
+- **Matching Lock**: Prevent double-matching a freelancer within seconds using a Redis lock.
+
+## 3. Backend Implementation (FastAPI)
+- **Redis Connection**: Create a Redis client in `main.py` (e.g., using `redis.Redis(host='localhost', port=6379)`).
+- **Update Matching Logic**: 
+    - When `GET /api/match` is called, it must now check Redis: 
+    - `IF EXISTS cooldown:{user_id}`, then EXCLUDE this person from the 5 candidates, even if they are 'idle' in PostgreSQL.
+- **Update Decline Logic**:
+    - When a freelancer declines, execute: `redis.setex(f"cooldown:{user_id}", 1800, project_id)`.
+
+## 4. Frontend Integration
+- Add a visual "Cooling Down" status to the Freelancer Queue view if the API returns a cooldown flag (provided by the Redis check).
+
+Please update `main.py` to include these Redis operations.

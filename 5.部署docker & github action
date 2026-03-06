@@ -1,0 +1,30 @@
+# Task: Setup Production Dockerfiles and GitHub Actions CI/CD
+
+## 1. Goal
+Prepare RotaFive for production deployment by creating optimized Dockerfiles and a GitHub Actions workflow.
+
+## 2. Backend (FastAPI) Production Dockerfile
+- Create `backend/Dockerfile.prod`.
+- Use a slim Python 3.11 image.
+- Set up a non-root user for security.
+- Use `gunicorn` with `uvicorn` workers for better stability in production.
+
+## 3. Frontend (Vue 3) Production Dockerfile
+- Create `frontend/Dockerfile.prod`.
+- **Stage 1 (Build)**: Use Node.js to run `npm run build`.
+- **Stage 2 (Serve)**: Use a lightweight `nginx:alpine` image to serve the `dist` folder.
+- Include a basic `nginx.conf` to handle Vue Router's history mode.
+
+## 4. GitHub Actions Workflow
+- Create `.github/workflows/main.yml`.
+- **Trigger**: On push to `main` branch.
+- **Steps**:
+    1. Checkout code.
+    2. Set up Docker Buildx.
+    3. Login to GitHub Container Registry (GHCR) or Docker Hub.
+    4. Build and Push both Frontend and Backend images with a `latest` tag and a `SHA` tag.
+    5. (Optional) Run Pytest before building.
+
+## 5. Requirement
+- Ensure the backend production image uses environment variables for DB and Redis connections (don't hardcode).
+- The frontend should be able to receive the API_URL as a build argument or environment variable.

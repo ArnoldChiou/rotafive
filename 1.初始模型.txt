@@ -1,0 +1,48 @@
+# Project Name: RotaFive - Fair Dispatch Freelance Marketplace
+
+## 1. Context & Goal
+I want to build a web prototype for "RotaFive", a freelancer matching platform. 
+Unlike traditional bidding sites, RotaFive uses an "Uber-style" dispatch system. 
+When a client posts a job, the system automatically finds 5 suitable freelancers based on a "Fair Rotation" algorithm and presents them to the client.
+
+## 2. Tech Stack
+- Framework: Vue 3 (Composition API)
+- Styling: Tailwind CSS + DaisyUI
+- Icons: Lucide-Vue-Next
+- State Management: Reactive API or Pinia (for mock data state)
+
+## 3. Core Logic (The "RotaFive" Algorithm)
+The AI should implement the following logic in the prototype:
+- **Freelancer Pool**: Create a mock list of 10-15 freelancers with: `id`, `name`, `skills` (array), `rating`, `lastAssignedAt` (timestamp), and `status` (idle/working/cooling).
+- **Matching Function**: 
+    1. Filter by required skills.
+    2. Sort by `lastAssignedAt` in ASCENDING order (Oldest first - this is the "Queue" mechanism).
+    3. Exclude those currently "Working".
+    4. Slice the top 5 candidates.
+- **Cycle Completion**: Once a client selects a freelancer:
+    1. Set the freelancer's `status` to 'working'.
+    2. Update their `lastAssignedAt` to the current timestamp (moving them to the back of the queue).
+
+## 4. UI/UX Requirements
+Please create a Single Page Application (SPA) layout with these sections:
+
+### A. Navigation & Branding
+- Header with "RotaFive" logo and a toggle to switch between "Client View" and "Freelancer Queue View".
+
+### B. Client View (The Matching Flow)
+- **Job Posting Form**: A simple input for job title and a multi-select for skills (e.g., Vue, Python, Design).
+- **Matching Animation**: A visual "Searching..." state to simulate the algorithm.
+- **The "Big 5" Selection**: 5 cards showing the matched freelancers' profiles. Include a "Select" button on each card.
+
+### C. The Rotation Queue (Admin/Transparency View)
+- A table or list showing all freelancers in the database.
+- Clearly show their `lastAssignedAt` time and a visual indicator of their position in the queue.
+- This view should update in real-time when a selection is made in the Client View to demonstrate the "fairness" logic.
+
+## 5. Specific Implementation Instructions
+- Use **Tailwind** for a clean, modern, and minimalist look.
+- Use **Transitions** (Vue <Transition>) for a smooth experience when the matching list appears.
+- Ensure the code is modular and comments explain the "Rotation" logic.
+- Do NOT use a real backend yet; use local reactive state to handle all data persistence for this session.
+
+Please generate the complete code for `App.vue` and any necessary components.
