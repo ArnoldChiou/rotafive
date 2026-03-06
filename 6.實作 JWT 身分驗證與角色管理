@@ -1,0 +1,38 @@
+# Task: Implement JWT Authentication and Role-Based Access Control (RBAC)
+
+## 1. Goal
+Introduce a secure login system to distinguish between 'Clients' and 'Freelancers'. Ensure that freelancers can only see their own invitations and clients can only manage their own projects.
+
+## 2. Database Updates (PostgreSQL)
+- **Create `users` table**: 
+    - `id`, `email` (unique), `hashed_password`, `role` ('client' or 'freelancer'), `created_at`.
+- **Link `freelancers` table**: Add a `user_id` column to link a freelancer profile to a user account.
+- **Link `projects` table**: Ensure `client_id` refers to the `id` from the `users` table.
+
+## 3. Backend Implementation (FastAPI)
+- **Dependencies**: Use `python-jose[cryptography]` for JWT and `passlib[bcrypt]` for password hashing.
+- **Auth Endpoints**:
+    - `POST /api/auth/register`: Create a new user and (if role is freelancer) an empty profile.
+    - `POST /api/auth/token`: Validate credentials and return a JWT access token.
+    - `GET /api/auth/me`: Return current user info based on the token.
+- **Security**: 
+    - Implement a `get_current_user` dependency.
+    - Protect existing endpoints:
+        - `GET /api/invitations` must now only return invitations for the `current_user`.
+        - `POST /api/match` must assign the `current_user.id` as the `client_id`.
+
+## 4. Frontend Implementation (Vue 3)
+- **Views**:
+    - Create `LoginView.vue` and `RegisterView.vue`.
+- **Store (`store.js`)**:
+    - Add `user` and `token` state.
+    - Implement `login()`, `logout()`, and `fetchMe()` methods.
+    - Automatically attach the `Authorization: Bearer <token>` header to all subsequent API calls.
+- **Router Guards**:
+    - Redirect unauthenticated users to `/login`.
+    - Prevent Freelancers from accessing the `ClientView` and vice versa.
+
+## 5. Requirement
+- Keep the existing "Fair Rotation" logic intact.
+- Use environment variables for `JWT_SECRET_KEY`.
+- Update the `CONTEXT.md` after implementation to reflect the new Auth architecture.

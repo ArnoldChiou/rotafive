@@ -38,13 +38,15 @@ const findMatches = async () => {
     // Fake delay for animation "Searching..."
     setTimeout(() => {
       currentProjectId.value = response.project_id;
-      matchedCandidates.value = response.matches;
+      matchedCandidates.value = response.matches || [];  // Guard: never undefined
       isSearching.value = false;
       matchComplete.value = true;
     }, 1500);
   } catch (error) {
     console.error("Error finding matches", error);
+    matchedCandidates.value = [];
     isSearching.value = false;
+    matchComplete.value = true;
   }
 };
 
@@ -88,41 +90,70 @@ const sendInvite = async (candidate) => {
 
 // Handle real-time sync across tabs using BroadcastChannel
 let syncChannel = null;
+let pollInterval = null;
+
+// Poll invitation statuses to detect declines from freelancer tab
+const pollMatchStatus = async () => {
+  if (!currentProjectId.value || matchedCandidates.value.length === 0) return;
+
+  try {
+    const res = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api'}/invitations`, {
+      headers: { Authorization: `Bearer ${sessionStorage.getItem('rotafive_token')}` }
+    });
+    if (!res.ok) return;
+    const invitations = await res.json();
+    const invitedIds = new Set(invitations.map(inv => inv.freelancer_id));
+
+    // Remove any candidate that was previously 'invited' but is no longer in the invitations list
+    // (meaning they accepted or declined)
+    matchedCandidates.value = matchedCandidates.value.filter(c => {
+      if (c.status === 'invited' && !invitedIds.has(c.id)) {
+        // This candidate is no longer invited — they responded
+        return false;
+      }
+      return true;
+    });
+  } catch (err) {
+    // Silently ignore polling errors
+  }
+};
 
 onMounted(() => {
   syncChannel = new BroadcastChannel('rotafive_sync');
   syncChannel.onmessage = (event) => {
     const data = event.data;
-    
-    // Only react if this event corresponds to our current project search
-    if (data.projectId !== currentProjectId.value) return;
+
+    // Accept messages for any project if projectId matches or is close
+    const sameProject = data.projectId === currentProjectId.value ||
+                        String(data.projectId) === String(currentProjectId.value);
+    if (!sameProject) return;
 
     if (data.type === 'DECLINED_REPLACED') {
-      // Slide out the declined candidate
       matchedCandidates.value = matchedCandidates.value.filter(c => c.id !== data.declinedId);
-      
-      // Slide in the new candidate
       const newCand = data.replacement;
-      newCand.status = 'idle'; // Because the backend no longer auto-invites them
-      matchedCandidates.value.push(newCand);
-    } 
+      if (newCand) {
+        newCand.status = 'idle';
+        matchedCandidates.value.push(newCand);
+      }
+    }
     else if (data.type === 'DECLINED_NO_REPLACEMENT') {
       matchedCandidates.value = matchedCandidates.value.filter(c => c.id !== data.declinedId);
       alert("A freelancer declined, but there are no more available replacements in the queue.");
     }
     else if (data.type === 'ACCEPTED') {
-      // The freelancer accepted, remove them from this view as they are now hired
       matchedCandidates.value = matchedCandidates.value.filter(c => c.id !== data.freelancerId);
       showSuccessMsg.value = true;
       setTimeout(() => showSuccessMsg.value = false, 3000);
     }
   };
+
+  // Polling fallback: catch changes the BroadcastChannel might miss (cross-browser-session)
+  pollInterval = setInterval(pollMatchStatus, 3000);
 });
 
 onUnmounted(() => {
-  if (syncChannel) {
-    syncChannel.close();
-  }
+  if (syncChannel) syncChannel.close();
+  if (pollInterval) clearInterval(pollInterval);
 });
 </script>
 

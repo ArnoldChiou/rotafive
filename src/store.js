@@ -1,187 +1,221 @@
 import { reactive, computed } from 'vue';
 
-const API_BASE_URL = 'http://localhost:8080/api';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api';
 
+// ─── Auth helpers ─────────────────────────────────────────────────────────────
+// Use sessionStorage so each browser tab can be logged in as a different user
+// (e.g. Client in Tab 1, Freelancer in Tab 2)
+function getToken() {
+    return sessionStorage.getItem('rotafive_token') || null;
+}
+
+function saveToken(token) {
+    sessionStorage.setItem('rotafive_token', token);
+}
+
+function clearToken() {
+    sessionStorage.removeItem('rotafive_token');
+}
+
+function authHeaders() {
+    const token = getToken();
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    return headers;
+}
+
+// ─── Store ────────────────────────────────────────────────────────────────────
 export const store = reactive({
-    freelancers: [], // Will hold real data fetched
+    token: getToken(),
+    user: null,         // { id, email, role }
+    freelancers: [],
 
-    // All unique skills available (Keep static or fetch if you prefer, but we can compute from fetched freelancers)
-    availableSkills: computed(() => {
-        // If we want a static robust list based on existing mocks:
-        return [
-            'Data Science', 'Design', 'Django', 'Docker', 'Figma', 'Flask', 'Illustration', 'JavaScript',
-            'Logo Design', 'Machine Learning', 'Next.js', 'Node.js', 'Nuxt', 'Photoshop', 'Python', 'React', 'SQL',
-            'Tailwind', 'TypeScript', 'UI/UX', 'Vue', 'Web Design'
-        ].sort();
-    }),
+    availableSkills: computed(() => [
+        'Data Science', 'Design', 'Django', 'Docker', 'Figma', 'Flask', 'Illustration', 'JavaScript',
+        'Logo Design', 'Machine Learning', 'Next.js', 'Node.js', 'Nuxt', 'Photoshop', 'Python', 'React', 'SQL',
+        'Tailwind', 'TypeScript', 'UI/UX', 'Vue', 'Web Design'
+    ].sort()),
 
+    // ─── Auth ──────────────────────────────────────────────────────────────────
+    async login(email, password) {
+        try {
+            // OAuth2 form format
+            const body = new URLSearchParams({ username: email, password });
+            const res = await fetch(`${API_BASE}/auth/token`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: body.toString()
+            });
+            if (!res.ok) return false;
+            const data = await res.json();
+            this.token = data.access_token;
+            saveToken(data.access_token);
+            await this.fetchMe();
+            return true;
+        } catch (err) {
+            console.error('Login error:', err);
+            return false;
+        }
+    },
+
+    async register(email, password, role, name = '', skills = []) {
+        try {
+            const res = await fetch(`${API_BASE}/auth/register`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, password, role, name: name || undefined, skills })
+            });
+            const data = await res.json();
+            if (!res.ok) return { success: false, message: data.detail || 'Registration failed' };
+            return { success: true };
+        } catch (err) {
+            return { success: false, message: 'Network error' };
+        }
+    },
+
+    async fetchMe() {
+        try {
+            const res = await fetch(`${API_BASE}/auth/me`, { headers: authHeaders() });
+            if (res.ok) this.user = await res.json();
+        } catch (err) {
+            console.error('fetchMe error:', err);
+        }
+    },
+
+    logout() {
+        this.token = null;
+        this.user = null;
+        this.freelancers = [];
+        clearToken();
+    },
+
+    // ─── Freelancers ──────────────────────────────────────────────────────────
     async fetchFreelancers() {
         try {
-            const response = await fetch(`${API_BASE_URL}/freelancers`);
-            if (response.ok) {
-                // data: [{id: 1, name: 'Alice', skills: '["Vue"]', rating: 4.8, status: 'idle', last_assigned_at: 'string'}]
-                const data = await response.json();
-
-                // Parse JSON strings in skills (asyncpg stringifies jsonb sometimes, or fastApi does as list directly depending on query)
+            const res = await fetch(`${API_BASE}/freelancers`, { headers: authHeaders() });
+            if (res.ok) {
+                const data = await res.json();
                 data.forEach(f => {
                     if (typeof f.skills === 'string') {
-                        try {
-                            f.skills = JSON.parse(f.skills);
-                        } catch (e) { /* ignore */ }
+                        try { f.skills = JSON.parse(f.skills); } catch (e) { }
                     }
                 });
                 this.freelancers = data;
             }
         } catch (err) {
-            console.error('Failed to fetch freelancers:', err);
+            console.error('fetchFreelancers error:', err);
         }
     },
 
-    // The rotational match algorithm via Backend GET /api/match
+    // ─── Matching ─────────────────────────────────────────────────────────────
     async getMatches(requiredSkills) {
-        let url = `${API_BASE_URL}/match`;
-        if (requiredSkills && requiredSkills.length > 0) {
-            url += `?skills=${encodeURIComponent(requiredSkills.join(','))}`;
-        }
-
+        let url = `${API_BASE}/match`;
+        if (requiredSkills?.length > 0) url += `?skills=${encodeURIComponent(requiredSkills.join(','))}`;
         try {
-            const response = await fetch(url);
-            const data = await response.json();
-
-            // data is now { project_id: int, matches: [...] }
+            const res = await fetch(url, { headers: authHeaders() });
+            if (!res.ok) {
+                console.error('Match API error:', res.status, await res.text());
+                return { project_id: null, matches: [] };
+            }
+            const data = await res.json();
             if (data.matches) {
                 data.matches.forEach(f => {
                     if (typeof f.skills === 'string') {
-                        try {
-                            f.skills = JSON.parse(f.skills);
-                        } catch (e) { }
+                        try { f.skills = JSON.parse(f.skills); } catch (e) { }
                     }
                 });
             }
-            return data;
+            return { project_id: data.project_id, matches: data.matches || [] };
         } catch (err) {
-            console.error("Match error:", err);
+            console.error('Match error:', err);
             return { project_id: null, matches: [] };
         }
     },
 
-    // Invite a specific freelancer explicitly
     async inviteFreelancer(freelancerId, projectId) {
         try {
-            const payload = {
-                freelancer_id: freelancerId,
-                project_id: projectId
-            };
-            const response = await fetch(`${API_BASE_URL}/invite`, {
+            const res = await fetch(`${API_BASE}/invite`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                headers: authHeaders(),
+                body: JSON.stringify({ freelancer_id: freelancerId, project_id: projectId })
             });
-            return response.ok;
+            return res.ok;
         } catch (err) {
-            console.error("Invite error:", err);
+            console.error('Invite error:', err);
             return false;
         }
     },
 
-    // Cycle completion via Backend POST /api/select (Legacy, but updated to use respond logic)
     async selectFreelancer(freelancerId, projectId = null) {
         try {
-            const payload = {
-                freelancer_id: freelancerId,
-                project_id: projectId || 1,
-                action: 'accept'
-            }
-            const response = await fetch(`${API_BASE_URL}/respond-invitation`, {
+            const res = await fetch(`${API_BASE}/respond-invitation`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                headers: authHeaders(),
+                body: JSON.stringify({ freelancer_id: freelancerId, project_id: projectId || 1, action: 'accept' })
             });
-
-            if (response.ok) {
+            if (res.ok) {
                 setTimeout(() => {
-                    fetch(`${API_BASE_URL}/reset-cooling?freelancer_id=${freelancerId}`, { method: 'POST' });
+                    fetch(`${API_BASE}/reset-cooling?freelancer_id=${freelancerId}`, {
+                        method: 'POST', headers: authHeaders()
+                    });
                 }, 15000);
-
                 await this.fetchFreelancers();
-
-                // Broadcast to other tabs
                 const bc = new BroadcastChannel('rotafive_sync');
                 bc.postMessage({ type: 'ACCEPTED', projectId, freelancerId });
                 bc.close();
-
                 return true;
             }
             return false;
         } catch (err) {
-            console.error("Select error:", err);
+            console.error('Select error:', err);
             return false;
         }
     },
 
-    // Decline invitation and get auto-replacement
     async declineInvitation(freelancerId, projectId) {
         try {
-            const payload = {
-                freelancer_id: freelancerId,
-                project_id: projectId,
-                action: 'decline'
-            };
-            const response = await fetch(`${API_BASE_URL}/respond-invitation`, {
+            const res = await fetch(`${API_BASE}/respond-invitation`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                headers: authHeaders(),
+                body: JSON.stringify({ freelancer_id: freelancerId, project_id: projectId, action: 'decline' })
             });
-
-            if (response.ok) {
-                const data = await response.json();
-
+            if (res.ok) {
+                const data = await res.json();
                 if (data.replaced_with) {
-                    let newFreelancer = data.replaced_with;
-                    if (typeof newFreelancer.skills === 'string') {
-                        try {
-                            newFreelancer.skills = JSON.parse(newFreelancer.skills);
-                        } catch (e) { }
+                    let newF = data.replaced_with;
+                    if (typeof newF.skills === 'string') {
+                        try { newF.skills = JSON.parse(newF.skills); } catch (e) { }
                     }
-
-                    // Broadcast to other tabs
                     const bc = new BroadcastChannel('rotafive_sync');
-                    bc.postMessage({
-                        type: 'DECLINED_REPLACED',
-                        projectId,
-                        declinedId: freelancerId,
-                        replacement: newFreelancer
-                    });
+                    bc.postMessage({ type: 'DECLINED_REPLACED', projectId, declinedId: freelancerId, replacement: newF });
                     bc.close();
-
-                    return newFreelancer;
+                    return newF;
                 }
-
-                // Even if no replacement, broadcast decline
                 const bc = new BroadcastChannel('rotafive_sync');
                 bc.postMessage({ type: 'DECLINED_NO_REPLACEMENT', projectId, declinedId: freelancerId });
                 bc.close();
-
                 return null;
             }
             return null;
         } catch (err) {
-            console.error("Decline error:", err);
+            console.error('Decline error:', err);
             return null;
         }
     },
 
-    // Used by Freelancer Mock View
     async fetchInvitations() {
         try {
-            const response = await fetch(`${API_BASE_URL}/invitations`);
-            if (response.ok) {
-                return await response.json();
-            }
+            const res = await fetch(`${API_BASE}/invitations`, { headers: authHeaders() });
+            if (res.ok) return await res.json();
             return [];
         } catch (err) {
-            console.error("fetchInvitations error", err);
+            console.error('fetchInvitations error:', err);
             return [];
         }
     }
 });
+
+// Rehydrate user on page load if token exists
+if (store.token) {
+    store.fetchMe();
+}
